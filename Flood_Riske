@@ -1,0 +1,92 @@
+Map.centerObject(table1);
+var sentinel2_t1= ee.ImageCollection('COPERNICUS/S2_SR')
+                   .filterBounds(table1)
+                   .filterDate('2017-07-01','2020-08-27')
+                   .min()
+                   .select('B[2-4]')
+                   .clip(table1);
+                   
+Map.addLayer(sentinel2_t1,{
+  bands: ['B4' , 'B3' , 'B2'],
+  min: 200,
+  max: 1600,
+  gamma: [1,1,1]
+}, 'sentinel2_t1');
+
+
+var sentinel2_t2= ee.ImageCollection( 'COPERNICUS/S2_SR')
+                   .filterBounds(table1)
+                   .filterDate('2019-09-01','2019-10-30')
+                   .min()
+                   .select('B[2-4]')
+                   .clip(table1);
+                   
+Map.addLayer(sentinel2_t2,{
+  bands: ['B4' , 'B3' , 'B2'],
+  min: 200,
+  max: 1600,
+  gamma: [1,1,1]
+}, 'sentinel2_t2');
+
+//NDVI 1
+
+var ndvi1= ee.ImageCollection('COPERNICUS/S2_SR')
+                   .filterBounds(table1)
+                   .filterDate('2017-07-01','2020-08-27')
+                   .map(function(img){
+                     return img.normalizedDifference(['B8' , 'B4'])
+                   })
+                   .max()
+                   .clip(table1)
+                   .rename('ndvi1');
+                   
+Map.addLayer(ndvi1,{max:1,min:-1}, 'NDVI1');
+
+
+//NDVI 2
+
+var ndvi2= ee.ImageCollection('COPERNICUS/S2_SR')
+                   .filterBounds(table1)
+                   .filterDate('2019-09-01','2019-10-30')
+                   .map(function(img){
+                     return img.normalizedDifference(['B8' , 'B4'])
+                   })
+                   .max()
+                   .clip(table1)
+                   .rename('ndvi2');
+                   
+Map.addLayer(ndvi2,{max:1,min:-1}, 'NDVI2');
+
+//diff NDVI
+var ndvidiff= ndvi1.subtract(ndvi2)
+      .rename('ndvidiff')
+      
+Map.addLayer(ndvidiff,{}, 'diffndvi');
+      
+//FLOOD AREA
+var flood= ndvidiff.gt(0.1)
+.rename('FLOOD');
+
+Map.addLayer(flood,{min:0, max:1, palette:['green', 'blue']},'FLOOD');
+
+//export
+
+Export.image.toDrive({
+  image: sentinel2_t2,
+  description: 'sentinel2_t22019701',
+  region: table1,
+  scale: 10
+});
+
+//ASTANE Area
+var thr =flood.gte(0,1);
+var mask = thr.updateMask(thr);
+Map.addLayer(mask,{palette:'red'},'floodRiske');
+var area = flood.multiply(ee.Image.pixelArea().divide(10000.0));
+var status = area.reduceRegion({reducer:ee.Reducer.sum(), geometry:table1, scale:10, maxPixels:1e9});
+print(status,'Area_ha')
+
+
+
+
+
