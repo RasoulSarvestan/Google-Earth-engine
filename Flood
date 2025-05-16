@@ -1,0 +1,51 @@
+// بارگذاری شیپ‌فایل شهرستان‌ها
+var counties = table; // شیپ‌فایل شهرستان‌ها که حاوی ویژگی‌های جغرافیایی است
+
+// بارگذاری داده‌های WRI Aqueduct Water Risk - baseline annual
+var dataset = ee.FeatureCollection("WRI/Aqueduct_Water_Risk/V4/baseline_annual");
+
+// لیست تاریخ‌ها برای استخراج داده‌ها
+var dates = ee.List([
+  '2020-01-01', '2020-02-01', '2020-03-01', '2020-04-01', '2020-05-01',
+  '2020-06-01', '2020-07-01', '2020-08-01', '2020-09-01', '2020-10-01',
+  '2020-11-01', '2020-12-01'
+]);
+
+// تابع استخراج داده‌ها برای هر تاریخ
+var extractData = ee.FeatureCollection(dates.map(function(date) {
+  var dateStr = ee.Date(date).format('YYYY-MM-dd');
+
+  // فیلتر کردن مجموعه داده‌ها بر اساس تاریخ
+  var filtered = dataset.filter(ee.Filter.equals('date', dateStr));
+
+  // استخراج داده‌ها برای هر شهرستان
+  var timeSeries = counties.map(function(feature) {
+    // فیلتر کردن داده‌ها بر اساس محدوده شهرستان
+    var filteredForFeature = filtered.filterBounds(feature.geometry()).first();
+
+    // بررسی اینکه آیا داده برای شهرستان موجود است
+    var rfr_cat_value = ee.Algorithms.If(
+      ee.Algorithms.IsEqual(filteredForFeature, null),
+      null, // اگر داده‌ای پیدا نشد، مقدار null برمی‌گرداند
+      filteredForFeature.get('rfr_label') // در غیر این صورت مقدار rfr_cat را استخراج می‌کند
+    );
+
+    // استفاده از مقدار پیش‌فرض (مثل 0) در صورتی که داده‌ها موجود نباشند
+    rfr_cat_value = ee.Algorithms.If(ee.Algorithms.IsEqual(rfr_cat_value, null), 0, rfr_cat_value);
+
+    return ee.Feature(null, {
+      'date': dateStr,
+      'PER_NAM': feature.get('PER_NAM'), // نام شهرستان یا ویژگی‌های دیگر
+      'rfr_label': rfr_cat_value // پارامتر مورد نظر برای استخراج
+    });
+  });
+
+  return ee.FeatureCollection(timeSeries); // تبدیل به FeatureCollection
+})).flatten(); // تبدیل لیست به یک FeatureCollection
+
+// دانلود داده‌ها به گوگل درایو
+Export.table.toDrive({
+  collection: extractData,
+  description: 'aqueduct_water_risk_data', // نام فایل خروجی
+  fileFormat: 'CSV' // فرمت فایل خروجی
+});
