@@ -1,0 +1,471 @@
+
+// بارگذاري نقشه منطقه‌اي که خودتان داريد (مثلاً در فرمت GeoJSON)
+var tehran = ee.FeatureCollection('users/sarvestan1990/Tehran_NDVI'); // مسير فايل خود را وارد کنيد
+// نقشه را به نمايش بگذاريد
+Map.centerObject(table, 10);  // مرکز نقشه را به منطقه شما تنظيم مي‌کند
+Map.addLayer(table, {}, 'table');
+
+// داده‌هاي CHIRPS از 1981
+var chirps = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+              .filterBounds(tehran)
+              .filterDate('2000-01-01', '2024-12-31');
+// Define the time range
+var startDate = '2020-01-01';
+var endDate = '2024-12-31';
+
+// بارش ماهانه
+var monthlyRain = ee.ImageCollection(
+  ee.List.sequence(2000, 2020).map(function(y) {
+    return ee.List.sequence(1, 12).map(function(m) {
+      var start = ee.Date.fromYMD(y, m, 1);
+      var end = start.advance(1, 'month');
+      var monthly = chirps.filterDate(start, end).sum()
+        .set('system:time_start', start.millis()) // افزودن زمان شروع به ويژگي سيستم
+        .set('year', y)
+        .set('month', m);
+      return monthly;
+    });
+  }).flatten()
+);
+
+// نمودار بارش براي يک نقطه
+var chart = ui.Chart.image.series({
+  imageCollection: monthlyRain,
+  region: tehran,
+  reducer: ee.Reducer.mean(),
+  scale: 3000
+}).setOptions({
+  title: 'Monthly Precipitation in Tehran (CHIRPS)',
+  vAxis: {title: 'Rainfall (mm)'},
+  hAxis: {title: 'Date'},
+});
+print(chart);
+
+////////////////////////////////////////////////////////////////////
+//کاربري اراضي
+// تعريف محدوده تهران
+var landcover = ee.Image("ESA/WorldCover/v100/2020");
+
+// برش داده به تهران
+var landcoverTehran = landcover.clip(tehran);
+
+// تنظيم پارامترهاي صادرات
+Export.image.toDrive({
+  image: landcoverTehran, // تصويري که مي‌خواهيد دانلود کنيد
+  description: 'landcover_tehran', // نام فايل خروجي
+  scale: 30, // مقياس داده‌ها
+  region: tehran, // منطقه‌اي که مي‌خواهيد داده‌ها از آن استخراج شوند
+  fileFormat: 'GeoTIFF' // فرمت فايل
+});
+/////////////////////////////////////////////////////////////////////////////////////////////
+
+// بارش مدل‌هاي CMIP6 براي RCP4.5 با مدل MIROC-ES2L
+var rcp = ee.ImageCollection("NASA/GDDP-CMIP6")
+           .filter(ee.Filter.eq('model', 'CanESM5'))  // مدل MIROC-ES2L
+           .filter(ee.Filter.eq("scenario", "ssp245"))  // سناريو RCP4.5 (ssp245)
+           .filter(ee.Filter.eq('variable', 'pr'))        // بارش
+           .filterDate('2020-01-01', '2030-12-31')  // بازه زماني 2020-2030
+           .select('pr')
+           .filterBounds(tehran);
+
+// بررسي تعداد تصاوير موجود
+print('Number of images in collection:', rcp.size());
+
+// اگر داده‌ها موجود هستند، عمليات ادامه پيدا مي‌کند
+if (rcp.size().getInfo() > 0) {
+  // بارش سالانه آينده
+  var futureAnnualRain = rcp.map(function(img){
+    return img.set('year', img.date().get('year'));
+  });
+
+  // رسم نمودار براي يک نقطه در تهران
+  var chartFuture = ui.Chart.image.series({
+    imageCollection: futureAnnualRain,
+    region: tehran,
+    reducer: ee.Reducer.mean(),
+    scale: 5000
+  }).setOptions({
+    title: 'Future Rainfall (RCP4.5, 2020–2030)',
+    vAxis: {title: 'Rainfall (mm/day)'},
+    hAxis: {title: 'Year'},
+  });
+  print(chartFuture);
+} else {
+  print('No data available for the selected period.');
+}
+
+/////////////////////////////////////////////////////////////////////
+// مرکز تهران و محدوده
+Map.centerObject(tehran, 10);
+
+// بارگذاري DEM (SRTM 30m)
+var dem = ee.Image("USGS/SRTMGL1_003").clip(tehran);
+Map.addLayer(dem, {min: 1000, max: 2000}, 'DEM');
+
+// محاسبه شيب
+var slope = ee.Terrain.slope(dem);
+Map.addLayer(slope, {min: 0, max: 30}, 'Slope');
+
+// شناسايي نواحي مسطح (شيب کمتر از 3 درجه)
+var flatAreas = slope.lt(3);
+Map.addLayer(flatAreas.updateMask(flatAreas), {palette: ['blue']}, 'Flat Areas');
+
+// دانلود DEM
+Export.image.toDrive({
+  image: dem,
+  description: 'dem_tehran',
+  scale: 30, // تنظيم مقياس
+  region: tehran, // محدوده جغرافيايي
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e8
+});
+
+// دانلود شيب
+Export.image.toDrive({
+  image: slope,
+  description: 'slope_tehran',
+  scale: 30, // تنظيم مقياس
+  region: tehran, // محدوده جغرافيايي
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e8
+});
+
+// دانلود نواحي مسطح
+Export.image.toDrive({
+  image: flatAreas,
+  description: 'flat_areas_tehran',
+  scale: 30, // تنظيم مقياس
+  region: tehran, // محدوده جغرافيايي
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e8
+});
+
+///////////////////////////////////////////////////////////////////////////
+
+// بارش در يک بازه زماني مشخص (2017-04-01 تا 2018-04-30)
+var rainfall = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+                .filterDate('2016-04-01', '2018-04-30')
+                .first()
+                .clip(tehran);
+
+// اگر تصوير بارش موجود نباشد، پيامي نمايش داده مي‌شود
+if (rainfall === null) {
+  print('No rainfall data available for the specified date.');
+} else {
+  Map.addLayer(rainfall, {min:0, max:50, palette:['white', 'blue']}, 'Daily Rainfall');
+}
+
+// آستانه بارش سنگين (مثلاً >20 ميلي‌متر)
+var heavyRain = rainfall.gt(5);
+
+// نمايش نواحي با بارش سنگين
+Map.addLayer(heavyRain.updateMask(heavyRain), {palette: ['red']}, 'Heavy Rain (>5 mm)');
+
+// بارگذاري DEM (SRTM 30m) براي محاسبه شيب
+var dem = ee.Image("USGS/SRTMGL1_003").clip(tehran);
+var slope = ee.Terrain.slope(dem);
+
+// شناسايي نواحي مسطح (شيب کمتر از 3 درجه)
+var flatAreas = slope.lt(3);
+Map.addLayer(flatAreas.updateMask(flatAreas), {palette: ['blue']}, 'Flat Areas');
+
+// نواحي مستعد سيلاب = بارش سنگين + شيب کم
+var floodRisk = flatAreas.and(heavyRain);
+Map.addLayer(floodRisk.updateMask(floodRisk), {palette: ['yellow']}, 'Potential Urban Flood Zones');
+
+// صادرات لايه سيلاب به Google Drive
+Export.image.toDrive({
+  image: floodRisk,
+  description: 'FloodRiskTehran',
+  scale: 30,
+  region: tehran,
+  fileFormat: 'GeoTIFF'
+});
+//////////////////////////////////////////////////////////////////////
+// بارگذاري DEM (SRTM 30m) براي محاسبه شيب
+var dem = ee.Image("USGS/SRTMGL1_003").clip(tehran);
+var slope = ee.Terrain.slope(dem);
+
+// شناسايي نواحي مسطح (شيب کمتر از 3 درجه)
+var flatAreas = slope.lt(3);
+Map.addLayer(flatAreas.updateMask(flatAreas), {palette: ['blue']}, 'Flat Areas');
+
+// نواحي مستعد سيلاب = بارش سنگين + شيب کم
+var floodRisk = flatAreas.and(heavyRain);
+Map.addLayer(floodRisk.updateMask(floodRisk), {palette: ['yellow']}, 'Potential Urban Flood Zones');
+
+// صادرات لايه سيلاب به Google Drive
+Export.image.toDrive({
+  image: floodRisk,
+  description: 'FloodRiskTehran',
+  scale: 30,
+  region: tehran,
+  fileFormat: 'GeoTIFF'
+});
+
+// انتخاب ويژگي‌ها
+var features = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(rainfall.rename('rainfall'))
+  .addBands(floodRisk.rename('label'));
+
+// منطقه مورد بررسي (تهران با buffer)
+var roi = tehran;
+
+// نمونه‌گيري تصادفي
+var samples = features.sample({
+  region: roi,
+  scale: 30,
+  numPixels: 3000,
+  seed: 42,
+  geometries: true  // براي خروجي گرفتن با مختصات
+});
+
+// نمايش خروجي
+print('Samples:', samples.limit(5));
+
+
+Export.table.toDrive({
+  collection: samples,
+  description: 'FloodSamples_Tehran',
+  fileFormat: 'CSV'
+});
+
+//////////////////////////////////////////////////////////////////////////////
+// ترکيب ويژگي‌ها و برچسب
+var inputFeatures = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(rainfall.rename('rainfall'))
+  .addBands(floodRisk.rename('label'));  // برچسب نهايي
+
+
+var trainingSamples = inputFeatures.sample({
+  region: tehran,
+  scale: 30,
+  numPixels: 3000,
+  seed: 42,
+  geometries: false
+});
+
+
+// تعريف طبقه‌بند
+var classifier = ee.Classifier.smileRandomForest(50)
+                  .train({
+                    features: trainingSamples,
+                    classProperty: 'label',
+                    inputProperties: ['slope', 'elevation', 'landcover', 'rainfall']
+                  });
+
+// حذف label براي اعمال مدل فقط روي ويژگي‌ها
+var predictionInput = inputFeatures.select(['slope', 'elevation', 'landcover', 'rainfall']);
+
+// اعمال مدل
+var classified = predictionInput.classify(classifier);
+Map.addLayer(classified, {min: 0, max: 1, palette: ['white', 'red']}, 'Flood Risk Prediction');
+// محاسبه دقت مدل روي همان داده‌هاي آموزش
+var validated = trainingSamples.classify(classifier);
+var testAccuracy = validated.errorMatrix('label', 'classification');
+print('Confusion Matrix:', testAccuracy);
+print('Accuracy:', testAccuracy.accuracy());
+
+Export.image.toDrive({
+  image: classified,
+  description: 'FloodRisk_RF_Tehran',
+  scale: 30,
+  region: tehran,
+  fileFormat: 'GeoTIFF'
+});
+
+var futureRain = ee.ImageCollection("NASA/GDDP-CMIP6")  // متغير بار
+  .filter(ee.Filter.eq('model', 'ACCESS-CM2'))  // يا مدل ديگر
+  .filter(ee.Filter.eq('scenario', 'ssp245'))   // RCP4.5 معادل ssp245 در CMIP6
+  .filterDate('2049-04-01', '2050-04-30')       // ماه پربارش فرضي
+  .select('pr')  // متغير بارش
+  .sum()
+  .multiply(86400)  // تبديل بارش از kg/m²/s به mm/day
+  .rename('rainfall_2050');
+  
+Export.image.toDrive({
+  image: futureRain,
+  description: 'rainfall_2050',
+  region: tehran,
+  scale: 50,
+  fileFormat: 'GeoTIFF'
+});
+
+
+// ورودي جديد براي سال 2050
+var prediction2050 = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(futureRain.rename('rainfall'));
+
+// اعمال مدل آموزش‌ديده روي داده آينده
+var futureClassified = prediction2050.classify(classifier);
+
+// نمايش نقشه پيش‌بيني سيلاب در آينده
+Map.addLayer(futureClassified, {min: 0, max: 1, palette: ['white', 'blue']}, 'Flood Risk 2050');
+
+// اختلاف بين نقشه فعلي و آينده
+var floodChange = futureClassified.subtract(classified);  // 1 = افزايش خطر
+
+Map.addLayer(floodChange, {
+  min: -1, max: 1, palette: ['green', 'blue', 'red']
+}, 'Flood Risk Change');
+
+Export.image.toDrive({
+  image: futureClassified,
+  description: 'FloodRisk_Tehran_2050_ssp245',
+  region: tehran,
+  scale: 300,
+  fileFormat: 'GeoTIFF'
+});
+////////////////////////////////////////////////////////////
+// GFDL model
+var futureRain_GFDL = ee.ImageCollection("NASA/GDDP-CMIP6")
+  .filter(ee.Filter.eq('model', 'GFDL-ESM4'))  // مدل GFDL
+  .filter(ee.Filter.eq('scenario', 'ssp245'))  // RCP4.5 معادل ssp245
+  .filterDate('2050-04-01', '2050-04-30')  // ماه پربارش فرضي
+  .select('pr')  // بارش
+  .sum()
+  .multiply(86400)  // تبديل به mm/day
+  .rename('rainfall_GFDL');
+
+// MPI-ESM model
+var futureRain_MPI = ee.ImageCollection("NASA/GDDP-CMIP6")
+  .filter(ee.Filter.eq('model', 'MPI-ESM1-2-HR'))  // مدل MPI-ESM
+  .filter(ee.Filter.eq('scenario', 'ssp245'))  // RCP4.5
+  .filterDate('2049-04-01', '2050-04-30')  // ماه پربارش فرضي
+  .select('pr')
+  .sum()
+  .multiply(86400)  // تبديل به mm/day
+  .rename('rainfall_MPI');
+
+
+
+// داده‌هاي جديد براي مدل GFDL
+var prediction_GFDL = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(futureRain_GFDL.rename('rainfall'));
+
+// پيش‌بيني سيلاب براي GFDL
+var classified_GFDL = prediction_GFDL.classify(classifier);
+
+// داده‌هاي جديد براي مدل MPI
+var prediction_MPI = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(futureRain_MPI.rename('rainfall'));
+
+// پيش‌بيني سيلاب براي MPI-ESM
+var classified_MPI = prediction_MPI.classify(classifier);
+
+// نمايش طبقه‌بندي براي هر مدل
+Map.addLayer(classified_GFDL, {min: 0, max: 1, palette: ['white', 'red']}, 'Flood Risk GFDL');
+Map.addLayer(classified_MPI, {min: 0, max: 1, palette: ['white', 'blue']}, 'Flood Risk MPI');
+//////////////////////////////
+
+// اختلاف بين مدل‌هاي GFDL و MPI
+var floodChange = classified_GFDL.subtract(classified_MPI);  // اختلاف سيلاب بين مدل‌ها
+
+// نمايش تفاوت‌ها
+Map.addLayer(floodChange, {
+  min: -1, max: 1, palette: ['green', 'white', 'red']
+}, 'Flood Risk Change (GFDL vs MPI)');
+
+////////////////////
+// ترکيب پيش‌بيني‌ها (ميانگين)
+var ensemblePrediction = classified_GFDL.add(classified_MPI).divide(2);
+
+// نمايش پيش‌بيني ترکيبي
+Map.addLayer(ensemblePrediction, {min: 0, max: 1, palette: ['white', 'yellow']}, 'Ensemble Flood Risk');
+//////////////////////////
+
+Export.image.toDrive({
+  image: ensemblePrediction,
+  description: 'FloodRisk_Ensemble_2050',
+  region: tehran,
+  scale: 300,
+  fileFormat: 'GeoTIFF'
+});
+////////////////////////
+// سناريو SSP2-4.5 (RCP4.5)
+var futureRain_SSP245 = ee.ImageCollection("NASA/GDDP-CMIP6")
+  .filter(ee.Filter.eq('model', 'CanESM5'))  // يا مدل ديگر
+  .filter(ee.Filter.eq('scenario', 'ssp245'))   // RCP4.5 معادل ssp245
+  .filterDate('2050-04-01', '2050-04-30')       // ماه پربارش فرضي
+  .select('pr')  // متغير بارش
+  .sum()
+  .multiply(86400)  // تبديل بارش از kg/m²/s به mm/day
+  .rename('rainfall_SSP245');
+
+// سناريو SSP5-8.5 (RCP8.5)
+var futureRain_SSP585 = ee.ImageCollection("NASA/GDDP-CMIP6")
+  .filter(ee.Filter.eq('model', 'CanESM5'))  // يا مدل ديگر
+  .filter(ee.Filter.eq('scenario', 'ssp585'))   // RCP8.5 معادل ssp585
+  .filterDate('2050-04-01', '2050-04-30')       // ماه پربارش فرضي
+  .select('pr')
+  .sum()
+  .multiply(86400)  // تبديل به mm/day
+  .rename('rainfall_SSP585');
+
+////////////////////////
+// داده‌هاي جديد براي SSP2-4.5
+var prediction_SSP245 = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(futureRain_SSP245.rename('rainfall'));
+
+// پيش‌بيني سيلاب براي SSP2-4.5
+var classified_SSP245 = prediction_SSP245.classify(classifier);
+
+// داده‌هاي جديد براي SSP5-8.5
+var prediction_SSP585 = slope.rename('slope')
+  .addBands(dem.rename('elevation'))
+  .addBands(landcover.select('Map').rename('landcover'))
+  .addBands(futureRain_SSP585.rename('rainfall'));
+
+// پيش‌بيني سيلاب براي SSP5-8.5
+var classified_SSP585 = prediction_SSP585.classify(classifier);
+
+// نمايش طبقه‌بندي براي هر سناريو
+Map.addLayer(classified_SSP245, {min: 0, max: 1, palette: ['white', 'blue']}, 'Flood Risk SSP2-4.5');
+Map.addLayer(classified_SSP585, {min: 0, max: 1, palette: ['white', 'red']}, 'Flood Risk SSP5-8.5');
+/////////////////////
+
+// اختلاف بين SSP2-4.5 و SSP5-8.5
+var floodChange = classified_SSP585.subtract(classified_SSP245);  // افزايش يا کاهش خطر سيلاب
+
+// نمايش تفاوت‌ها
+Map.addLayer(floodChange, {
+  min: -1, max: 1, palette: ['green', 'white', 'red']
+}, 'Flood Risk Change (SSP2-4.5 vs SSP5-8.5)');
+///////////////////
+// ترکيب پيش‌بيني‌ها (ميانگين)
+var ensemblePrediction = classified_SSP245.add(classified_SSP585).divide(2);
+
+// نمايش پيش‌بيني ترکيبي
+Map.addLayer(ensemblePrediction, {min: 0, max: 1, palette: ['white', 'yellow']}, 'Ensemble Flood Risk (SSP2-4.5 vs SSP5-8.5)');
+
+/////////////////////
+Export.image.toDrive({
+  image: ensemblePrediction,
+  description: 'FloodRisk_Ensemble_2050_SSP245_SSP585',
+  region: tehran,
+  scale: 300,
+  fileFormat: 'GeoTIFF'
+});
+
+
+
+
+
+
+
+
+
+
+
