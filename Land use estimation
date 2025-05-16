@@ -1,0 +1,113 @@
+Map.centerObject(table);
+Map.addLayer(table, {}, 'shp', false);
+
+var l5 = ee.ImageCollection ("LANDSAT/LT05/C02/T1_L2") 
+.filterBounds (table)
+.filterDate('1985-04-01', '1986-12-01')
+.filter(ee.Filter.lt('CLOUD_COVER',7));
+
+print ( l5);
+
+Map.addLayer( l5, {}, 'image', false);
+
+///
+function applyScalefactors (image){
+  var opticalBands= image.select('SR_B.').multiply (0.0000275).add(-0.2);
+  var thermalBands=  image.select('ST_B*.').multiply (0.00341802).add(149.0);
+  return image.addBands (opticalBands, null, true)
+               .addBands (thermalBands, null, true);}
+               
+var rescale =  l5. map(applyScalefactors); 
+
+var lan5= rescale.median().clip(table);
+var visualization = {
+bands: ['SR_B4','SR_B3','SR_B2'],
+min: 0.0,
+max: 0.3,
+};
+
+Map.addLayer(lan5, visualization, 'landsat5', false);
+
+// Sampling
+
+var trainData = vegetation.merge(Water).merge(buillding).merge(soil).merge(bayer).merge(rock).merge(grass);
+
+var bands = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7', 'SR_ATMOS_OPACITY', 'SR_CLOUD_QA'];
+
+// Training
+
+var training = lan5.select(bands).sampleRegions({
+  collection:trainData,
+  properties:['cover'],
+  scale:10
+  });
+  
+// Classifier
+
+var classifier = ee.Classifier.smileRandomForest(100).train({
+  features:training,
+  classProperty:'cover',
+  inputProperties : bands
+});
+
+// Classified image
+
+var classified = lan5.select(bands).classify(classifier);
+
+Map.addLayer(classified,{min : 0, max : 2,
+  palette : ['green','yellow','blue','red','black','orange','violet']
+},'Classified',false);
+
+// Accueacy
+
+print('confusion matrix',classifier.confusionMatrix());
+print('overal accuracy',classifier.confusionMatrix().accuracy());
+
+Export.image.toDrive({
+  image: classified,
+  description: 'landsat5',
+  folder: 'Class_Landsat',
+  region: table,
+  scale: 1000,
+  crs: 'EPSG:32639',
+  maxPixels: 1e13});
+
+
+
+Export.image.toDrive({
+  image: classified,
+  description: 'landsat6',
+  region: table,
+  scale: 10
+});
+
+
+
+
+
+/*
+// accuracy
+
+var trainAcc=classifier.confusionMatrix();
+print('Resub error matrix',trainAcc)
+print('overall train acc',trainAcc.accuracy());
+
+// test acc
+var testData = vegTst.merge(waterTst).merge(buildTst).merge(soil1Tst).merge(soil2Tst);
+
+var validation=Landsat.sampleRegions({
+  collection:testData,
+  properties:['landuse'],
+  scale:10
+});
+
+var validationClasses = validation.classify(classifier);
+
+
+var testAcc=validationClasses.errorMatrix('landuse','classification');
+print('validation error matrix',testAcc)
+print('overall test acc',testAcc.accuracy());
+*/
+
+//print('confusion matrix',classifier.confusionMatrix());
+//print('overal accuracy',classifier.confusionMatrix().accuracy());
