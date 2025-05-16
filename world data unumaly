@@ -1,0 +1,71 @@
+
+
+// تعریف مدل‌ها و سناریوها
+var models = ['GFDL-ESM4', 'CESM2-WACCM', 'MPI-ESM1-2-HR'];  // مدل‌ها
+var scenarios = ['ssp245', 'ssp370'];  // سناریوها
+
+// انتخاب متغیر: 'tas' برای دما یا 'pr' برای بارش
+var variable = 'tas';  // متغیر مورد نظر
+
+// تعریف بازه زمانی
+var startYear = 2000;
+var endYear = 2020;
+
+// تابع محاسبه میانگین سالانه
+var calculateAnnualMean = function(imageCollection, year) {
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = ee.Date.fromYMD(year, 12, 31);
+  return imageCollection
+    .filterDate(startDate, endDate)
+    .mean()
+    .set('year', year);
+};
+
+// تابع محاسبه داده برای کشورها
+var calculateCountryData = function(country, year, scenario, model) {
+  var filteredData = ee.ImageCollection('NASA/GDDP-CMIP6')
+    .filter(ee.Filter.eq('model', model))
+    .filter(ee.Filter.eq('scenario', scenario))
+    .filter(ee.Filter.date(ee.Date.fromYMD(year, 1, 1), ee.Date.fromYMD(year, 12, 31)))
+    .select(variable);
+
+  var annualMean = filteredData.mean();
+  var stats = annualMean.reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: country.geometry(),
+    scale: 50000,
+    maxPixels: 1e8
+  });
+
+  return ee.Feature(null, {
+    country: country.get('COUNTRY'), // فرض: نام کشور در فیلد 'name'
+    year: year,
+    scenario: scenario,
+    model: model,
+    meanValue: stats.get(variable)
+  });
+};
+
+// تولید داده‌ها
+var allData = ee.FeatureCollection([]);
+countries.evaluate(function(countryList) {
+  var countryFeatures = ee.FeatureCollection(countryList);
+
+  models.forEach(function(model) {
+    scenarios.forEach(function(scenario) {
+      for (var year = startYear; year <= endYear; year++) {
+        countryFeatures.map(function(country) {
+          var feature = calculateCountryData(country, year, scenario, model);
+          allData = allData.merge(ee.FeatureCollection([feature]));
+        });
+      }
+    });
+  });
+
+  // خروجی به CSV
+  Export.table.toDrive({
+    collection: allData,
+    description: 'AnnualScenarioDataExport',
+    fileFormat: 'CSV'
+  });
+});
