@@ -1,0 +1,44 @@
+var table = ee.FeatureCollection("FAO/GAUL/2015/level1");
+
+Map.centerObject(roi);
+Map.addLayer(roi);
+
+var time_start = '2020', time_end = '2022';
+
+var urban = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+    .select('label')
+    .filterDate(time_start, time_end)
+    .filterBounds(roi)
+    .filter(ee.Filter.calendarRange(5, 9, 'month'))
+    .mode().eq(6);
+
+Map.addLayer(urban.clip(roi), [], 'urban', false);
+
+var landsat = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    .select('ST_B10')
+    .filterBounds(roi)
+    .filterDate(time_start, time_end)
+    .filter(ee.Filter.calendarRange(1, 12, 'month'))
+    .filter(ee.Filter.lt('CLOUD_COVER', 10))
+    .map(function(img) {
+        var gain = ee.Number(img.get('TEMPERATURE_MULT_BAND_ST_B10'));
+        var offset = ee.Number(img.get('TEMPERATURE_ADD_BAND_ST_B10'));
+        return img.multiply(gain).add(offset).subtract(273.15) // تبدیل به °C
+            .copyProperties(img, img.propertyNames());
+    });
+
+var tir_img = landsat.median();
+
+// نمایش مقدار واقعی دمای سطح زمین به °C
+Map.addLayer(tir_img.clip(roi), { min: 0, max: 50, palette: ['blue', 'green', 'yellow', 'red'] }, 'LST (°C)', false);
+
+// خروجی مستقیم به GIS
+Export.image.toDrive({
+    image: tir_img.clip(roi),
+    description: 'LST_Celsius20202022',
+    scale: 100,
+    region: roi,
+    crs: 'EPSG:4326',
+    maxPixels: 1e13,
+    folder: 'test'
+});
