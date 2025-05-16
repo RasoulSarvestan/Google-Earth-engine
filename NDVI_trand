@@ -1,0 +1,195 @@
+Map.centerObject(table);
+Map.addLayer(table);
+
+var VEG = function(img){
+  var bands = img.select('NDVI','EVI').multiply(0.0001).clip(table);
+  return bands.copyProperties(img,['system:time_start','system:time_end']);
+};
+
+
+var modis = ee.ImageCollection("MODIS/006/MOD13A1")
+.filterDate('1980-01-01','2022-01-25')
+.filterBounds(table);
+
+//print('modisImages:',modis);
+
+var modisVeg = modis.map(VEG);
+
+//print('modisVegImages:',modisVeg);
+
+print(
+  ui.Chart.image.series(modisVeg, table, ee.Reducer.mean(), 500, 'system:time_start')
+  .setOptions({
+    title: 'vegetation monitoring',
+    vAxis: {title: 'index valuse'},
+    hAxis: {title: 'time'},
+    lineWidth: 1,
+    pointSize: 1,
+    trendlines: {0:{color: 'green'},1:{color:'orange'}},
+    series: {0:{color: 'green'},1:{color:'orange'}}
+  })
+  );
+
+// vegetation mapping
+
+var meanMap = modisVeg.mean().select('EVI');
+var medianMap = modisVeg.median().select('EVI');
+var maxMap = modisVeg.max().select('EVI');
+var minMap = modisVeg.min().select('EVI');
+var sumMap = modisVeg.sum().select('EVI');
+
+Map.addLayer(meanMap,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'meanMap',false);
+
+Map.addLayer(medianMap,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'medianMap',false);
+
+Map.addLayer(maxMap,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'maxMap',false);
+  
+Map.addLayer(minMap,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'minMap',false);
+  
+Map.addLayer(sumMap,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'sumMap',false);
+
+
+
+
+// spatio-temporal analysis
+
+var VegChange = function(img){
+  var EVI = img.select('EVI').multiply(0.0001).clip(table);
+  var time = img.metadata('system:time_start').multiply(1e15);
+  return EVI.addBands(time)
+  .copyProperties(img,['system:time_start','system:time_end']);
+};
+
+var modisVegChange = modis
+.map(VegChange)
+.select('system:time_start','EVI')
+.reduce(ee.Reducer.linearFit())
+.select('scale').clip(table);
+
+Map.addLayer(modisVegChange,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'modisVegChange',false);
+
+
+// anomaly detection process
+
+var collection = ee.ImageCollection("MODIS/006/MOD13A1")
+.filterBounds(table)
+.select('EVI');
+
+var reference = collection
+.filterDate('1980-01-01','2011-01-01')
+.sort('system:time_start',false);
+
+var mean = reference.mean().clip(table);
+
+var ANOMALY = function(img){
+  var anomaly = img.subtract(mean).clip(table);
+  return anomaly
+  .copyProperties(img,['system:time_start','system:time_end']);
+};
+
+var series = collection
+.filterDate('2011-01-01','2022-01-25')
+.map(ANOMALY)
+.sum();
+
+Map.addLayer(series,{ palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]},'modisAnomaly',false);
+
+
+// cummulative anomaly
+
+
+var series = collection
+.filterDate('2011-01-01','2022-01-25')
+.map(ANOMALY);
+
+var time0 = reference.first().get('system:time_start');
+
+var first = ee.List([
+  ee.Image(0).set('system:time_start',time0).select([0],['EVI'])
+  ]);
+
+var accumulate = function(img,list){
+  
+  var previous = ee.Image(ee.List(list).get(-1));
+  var added  = img.add(previous)
+  .set('system:time_start',img.get('system:time_start'));
+  
+  return ee.List(list).add(added);
+  
+};
+
+var cummulative = ee.ImageCollection(
+  ee.List(series.iterate(accumulate,first))
+  );
+  
+ print('cummulativeAnomaly:',cummulative);
+
+
+print(
+  ui.Chart.image.series(cummulative, table, ee.Reducer.mean(), 1000, 'system:time_start')
+  .setOptions({
+    title: 'vegetation cummulative anomaly monitoring',
+    vAxis: {title: 'index valuse'},
+    hAxis: {title: 'time'},
+    lineWidth: 1,
+    pointSize: 2,
+    trendlines: {0:{color: 'black'}},
+    series: {0:{color: 'green'}}
+  })
+  );
+
+
+Export.image.toDrive({
+  image: minMap,
+  description: 'modis_minMap',
+  scale: 10,
+  maxPixels: 1e13,
+  crs:minMap.getInfo().crs,
+  region: table
+});
+
+
+
+//print(
+  //ui.Chart.image.series(modisVeg, table, ee.Reducer.mean(), 500, 'system:time_start')
+  //.setOptions({
+ //   title: 'vegetation monitoring',
+ //   vAxis: {title: 'index valuse'},
+  //  hAxis: {title: 'time'},
+  //  lineWidth: 1,
+  //  pointSize: 1,
+   // trendlines: {0:{color: 'green'},1:{color:'orange'}},
+  //  series: {0:{color: 'green'},1:{color:'orange'}}
+ // })
+ // );
+
+  
+  
